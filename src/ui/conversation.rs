@@ -2848,7 +2848,7 @@ struct View<'a> {
     /// The loaded messages, where a quote finds the picture it quotes.
     messages: &'a [Message],
     me: Option<&'a str>,
-    auto_download: bool,
+    auto_download: crate::settings::AutoDownload,
     connected: bool,
     account_receipts_off: bool,
     poll_voting: &'a HashSet<(ChatId, String)>,
@@ -3214,7 +3214,7 @@ fn messages(app: &mut App, ui: &mut egui::Ui, chat: &Chat, under: f32, over: f32
         chat,
         messages: &conversation.messages,
         me: app.me.as_deref(),
-        auto_download: app.account().settings.auto_download,
+        auto_download: app.account().settings.auto_downloads,
         connected: app.link.is_connected(),
         account_receipts_off: app.account_receipts_off,
         poll_voting: &app.poll_voting,
@@ -7666,7 +7666,7 @@ pub(crate) fn list_menu(
         chat,
         messages: &[],
         me: app.me.as_deref(),
-        auto_download: app.settings.auto_download,
+        auto_download: crate::settings::AutoDownload::default(),
         connected: app.link.is_connected(),
         poll_voting: &app.poll_voting,
         interactive_pending: &app.interactive_sending,
@@ -7734,7 +7734,7 @@ pub(crate) fn still_transcript(
         chat,
         messages,
         me: Some(me),
-        auto_download: false,
+        auto_download: crate::settings::AutoDownload::default(),
         connected: app.link.is_connected(),
         account_receipts_off: app.account_receipts_off,
         poll_voting: &app.poll_voting,
@@ -9654,7 +9654,15 @@ fn album_tile(
     } else if media.path.is_none()
         && matches!(media.state, MediaState::Idle)
         && ui.is_rect_visible(rect)
-        && auto_download_allowed(media, false, view.auto_download)
+        && auto_download_allowed(
+            media,
+            if matches!(message.content, Content::Image { .. }) {
+                AutoDownloadKind::Photo
+            } else {
+                AutoDownloadKind::Video
+            },
+            view.auto_download,
+        )
     {
         // A member comes into view as a single photo or video would, and
         // downloads by itself under the same setting and size limit.
@@ -9801,7 +9809,7 @@ fn carousel_picture(
     } else if !matches!(media.state, MediaState::Downloading)
         && (clicked
             || (visible
-                && auto_download_allowed(media, false, view.auto_download)
+                && auto_download_allowed(media, AutoDownloadKind::Photo, view.auto_download)
                 && matches!(media.state, MediaState::Idle)))
     {
         actions.push(Action::Download {
@@ -10840,9 +10848,14 @@ fn picture(
         .on_hover_cursor(egui::CursorIcon::PointingHand)
         .clicked()
         && !matches!(media.state, MediaState::Downloading);
+    let kind = if sticker.is_some() {
+        AutoDownloadKind::Sticker
+    } else {
+        AutoDownloadKind::Photo
+    };
     let auto = ui.is_rect_visible(rect)
         && matches!(media.state, MediaState::Idle)
-        && auto_download_allowed(media, sticker.is_some(), view.auto_download);
+        && auto_download_allowed(media, kind, view.auto_download);
     if wants || auto {
         actions.push(Action::Download {
             manual: wants,
@@ -10922,10 +10935,31 @@ fn motion_clip(
     }
 }
 
-/// Stickers always download when visible, while other media follows the setting.
-/// Every automatic download still respects the shared size limit.
-fn auto_download_allowed(media: &Media, sticker: bool, auto_download: bool) -> bool {
-    media.is_within_download_limit() && (sticker || auto_download)
+/// Which attachment category governs an automatic download.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AutoDownloadKind {
+    Photo,
+    Video,
+    Audio,
+    Document,
+    Sticker,
+}
+
+/// Whether an unseen attachment may download automatically under the
+/// account's per-kind settings and the shared size limit.
+fn auto_download_allowed(
+    media: &Media,
+    kind: AutoDownloadKind,
+    settings: crate::settings::AutoDownload,
+) -> bool {
+    let enabled = match kind {
+        AutoDownloadKind::Photo => settings.photos,
+        AutoDownloadKind::Video => settings.videos,
+        AutoDownloadKind::Audio => settings.audio,
+        AutoDownloadKind::Document => settings.documents,
+        AutoDownloadKind::Sticker => settings.stickers,
+    };
+    enabled && media.is_within_download_limit()
 }
 
 /// Draws a video. GIFs play in place; other videos play in the bubble once
@@ -11138,8 +11172,7 @@ fn video(
     let auto = ui.is_rect_visible(rect)
         && media.path.is_none()
         && matches!(media.state, MediaState::Idle)
-        && view.auto_download
-        && media.is_within_download_limit();
+        && auto_download_allowed(media, AutoDownloadKind::Video, view.auto_download);
     if auto {
         actions.push(Action::Download {
             manual: false,
@@ -11531,8 +11564,7 @@ fn video_note(
     let auto = ui.is_rect_visible(rect)
         && media.path.is_none()
         && matches!(media.state, MediaState::Idle)
-        && view.auto_download
-        && media.is_within_download_limit();
+        && auto_download_allowed(media, AutoDownloadKind::Video, view.auto_download);
     if auto {
         actions.push(Action::Download {
             manual: false,
@@ -11687,11 +11719,15 @@ fn attachment(
             }
         }
     }
+    let kind = if matches!(message.content, Content::Video { .. }) {
+        AutoDownloadKind::Video
+    } else {
+        AutoDownloadKind::Document
+    };
     let auto = ui.is_rect_visible(rect)
         && media.path.is_none()
         && matches!(media.state, MediaState::Idle)
-        && view.auto_download
-        && media.is_within_download_limit();
+        && auto_download_allowed(media, kind, view.auto_download);
     if auto {
         actions.push(Action::Download {
             manual: false,
@@ -12220,8 +12256,7 @@ fn voice_player(
     }
     let auto = media.path.is_none()
         && matches!(media.state, MediaState::Idle)
-        && view.auto_download
-        && media.is_within_download_limit();
+        && auto_download_allowed(media, AutoDownloadKind::Audio, view.auto_download);
     if auto {
         actions.push(Action::Download {
             manual: false,
@@ -13942,7 +13977,7 @@ mod tests {
             chat: &chat,
             messages: &[],
             me: None,
-            auto_download: app.settings.auto_download,
+            auto_download: app.account().settings.auto_downloads,
             connected: false,
             poll_voting: &app.poll_voting,
             interactive_pending: &app.interactive_sending,
@@ -14472,12 +14507,51 @@ mod tests {
     }
 
     #[test]
-    fn visible_stickers_download_automatically_with_the_attachment_setting_off() {
-        let mut sticker = media(Some(180), Some(180));
-        assert!(auto_download_allowed(&sticker, true, false));
-        assert!(!auto_download_allowed(&sticker, false, false));
-        sticker.size = crate::model::ATTACHMENT_DOWNLOAD_LIMIT + 1;
-        assert!(!auto_download_allowed(&sticker, true, false));
+    fn auto_download_respects_each_kind_and_the_size_limit() {
+        use crate::settings::AutoDownload;
+
+        let item = media(Some(180), Some(180));
+        let all_kinds = [
+            AutoDownloadKind::Photo,
+            AutoDownloadKind::Video,
+            AutoDownloadKind::Audio,
+            AutoDownloadKind::Document,
+            AutoDownloadKind::Sticker,
+        ];
+        let off = AutoDownload::default();
+        for kind in all_kinds {
+            assert!(!auto_download_allowed(&item, kind, off), "{kind:?}");
+        }
+
+        let only = |enable: fn(&mut AutoDownload)| {
+            let mut settings = AutoDownload::default();
+            enable(&mut settings);
+            settings
+        };
+        let configs = [
+            (AutoDownloadKind::Photo, only(|s| s.photos = true)),
+            (AutoDownloadKind::Video, only(|s| s.videos = true)),
+            (AutoDownloadKind::Audio, only(|s| s.audio = true)),
+            (AutoDownloadKind::Document, only(|s| s.documents = true)),
+            (AutoDownloadKind::Sticker, only(|s| s.stickers = true)),
+        ];
+        for (enabled_kind, settings) in configs {
+            for kind in all_kinds {
+                assert_eq!(
+                    auto_download_allowed(&item, kind, settings),
+                    kind == enabled_kind,
+                    "enabled {enabled_kind:?}, checked {kind:?}"
+                );
+            }
+        }
+
+        let mut oversized = item;
+        oversized.size = crate::model::ATTACHMENT_DOWNLOAD_LIMIT + 1;
+        let mut all_on = AutoDownload::default();
+        all_on.set_all(true);
+        for kind in all_kinds {
+            assert!(!auto_download_allowed(&oversized, kind, all_on), "{kind:?}");
+        }
     }
 
     /// The typing dots animate at the display's rate, not a fixed timer.

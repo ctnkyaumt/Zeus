@@ -515,7 +515,7 @@ fn run() -> eframe::Result<()> {
                     app.attach(&cc.egui_ctx);
                     // Registered here rather than in `attach`, which headless
                     // tests call too: they must never start a browser.
-                    #[cfg(all(unix, not(target_os = "macos")))]
+                    #[cfg(any(target_os = "windows", all(unix, not(target_os = "macos"))))]
                     cc.egui_ctx
                         .add_plugin(zeus::opener::DetachedLinks::default());
                     #[cfg(feature = "demo")]

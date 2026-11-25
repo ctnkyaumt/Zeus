@@ -916,6 +916,7 @@ pub async fn run(
         sticker_clicked: HashSet::new(),
         sticker_retried: HashSet::new(),
         sticker_arrivals: 0,
+        auto_download_stickers: false,
         favorites_pushing: false,
         favorites_again: false,
         favorites_recovered,
@@ -1530,6 +1531,8 @@ struct Worker {
     sticker_retried: HashSet<(ChatId, String)>,
     /// Picker stickers that arrived since the shelves were last sent.
     sticker_arrivals: usize,
+    /// Whether missing picker stickers may be downloaded in the background.
+    pub(super) auto_download_stickers: bool,
     /// Whether favorite changes are on their way to the phone.
     favorites_pushing: bool,
     /// More favorite changes arrived while a push was running.
@@ -7419,6 +7422,12 @@ impl Worker {
             Command::SetHistoryPrefetch { on, focused } => {
                 self.prefetch.configure(on, focused);
             }
+            Command::SetAutoDownloadStickers(on) => {
+                self.auto_download_stickers = on;
+                if on {
+                    self.fetch_missing_stickers();
+                }
+            }
             Command::LoadUntil { chat, id, before } => self.load_until(chat, id, before),
             Command::SearchMessages { query } => self.search_messages(query),
             Command::SearchChatMessages {
@@ -10630,6 +10639,9 @@ impl Worker {
 
     /// Downloads missing recent and archived stickers for the picker.
     fn fetch_missing_stickers(&mut self) {
+        if !self.auto_download_stickers {
+            return;
+        }
         let Some(client) = self.client.clone() else {
             return;
         };
@@ -20343,6 +20355,7 @@ mod receipt_tests {
             sticker_clicked: HashSet::new(),
             sticker_retried: HashSet::new(),
             sticker_arrivals: 0,
+            auto_download_stickers: false,
             favorites_pushing: false,
             favorites_again: false,
             favorites_recovered: true,

@@ -1355,6 +1355,7 @@ mod tests {
             .await
             .expect("bot");
         worker.client = Some(bot.client());
+        worker.auto_download_stickers = true;
         let chat = "a@s.whatsapp.net";
         worker.archive.ensure_chat(chat, "A").expect("chat");
         (worker, root, bot, commands, events)
@@ -1371,6 +1372,41 @@ mod tests {
         worker.fetch_missing_stickers();
         assert_eq!(
             worker.sticker_downloads.len(),
+            super::super::sticker_pace::IN_FLIGHT
+        );
+    }
+
+    #[tokio::test]
+    async fn picker_skips_auto_downloads_until_sticker_auto_download_is_on() {
+        let (default_worker, _root, _events, _commands) = sticker_worker();
+        assert!(!default_worker.auto_download_stickers);
+
+        let (mut worker, _root, _bot, _commands, _events) = picker_worker().await;
+        worker.auto_download_stickers = false;
+        let mut raw = wa::StickerMetadata::default();
+        raw.direct_path = Some("/v/t62.15575-24/r1.enc".into());
+        raw.media_key = Some(vec![1; 32]);
+        raw.file_enc_sha256 = Some(vec![2; 32]);
+        raw.file_sha256 = Some(vec![3; 32]);
+        raw.file_length = Some(100);
+        raw.mimetype = Some("image/webp".into());
+        let raw = raw.encode_to_vec();
+        worker
+            .archive
+            .upsert_phone_sticker("r1", &raw, 1, 0.5)
+            .expect("stored");
+        sent_sticker_without_file(&worker, "a@s.whatsapp.net", "s1", 1);
+
+        worker.fetch_missing_stickers();
+        assert!(worker.sticker_downloads.is_empty());
+        assert!(worker.sticker_fetches.is_empty());
+
+        worker
+            .handle_command(Command::SetAutoDownloadStickers(true))
+            .await;
+        assert!(worker.auto_download_stickers);
+        assert_eq!(
+            worker.sticker_fetches.len() + worker.sticker_downloads.len(),
             super::super::sticker_pace::IN_FLIGHT
         );
     }

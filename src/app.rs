@@ -6274,6 +6274,24 @@ impl App {
     /// link is gone. Returns how long until the pause ends, for a repaint
     /// then, while one is running.
     pub(crate) fn watch_link_preview(&mut self, now: f64) -> Option<Duration> {
+        if !self.account().settings.link_previews {
+            if self
+                .composer_preview
+                .as_ref()
+                .is_some_and(|preview| preview.account == self.account().id)
+            {
+                self.composer_preview = None;
+            }
+            if self
+                .preview_seen
+                .as_ref()
+                .is_some_and(|seen| seen.0 == self.account().id)
+            {
+                self.preview_seen = None;
+                self.preview_typed_at = None;
+            }
+            return None;
+        }
         let unchanged = self
             .preview_seen
             .as_ref()
@@ -6300,6 +6318,7 @@ impl App {
             .clone()
             .filter(|chat| {
                 self.editing.is_none()
+                    && self.account().settings.link_previews
                     && !self.link_previews_disabled
                     && self.chat(chat).is_some_and(Chat::can_send)
             })
@@ -6342,7 +6361,11 @@ impl App {
     /// The composer's preview while it belongs to `text` in `chat` of the
     /// account on screen, and previews may be shown.
     fn preview_for(&self, chat: &str, text: &str) -> Option<&ComposerPreview> {
-        if self.link_previews_disabled || self.editing.is_some() || !self.pending.is_empty() {
+        if !self.account().settings.link_previews
+            || self.link_previews_disabled
+            || self.editing.is_some()
+            || !self.pending.is_empty()
+        {
             return None;
         }
         let url = composer_link(text)?;
@@ -6369,11 +6392,14 @@ impl App {
         url: String,
         preview: Option<crate::model::ComposedPreview>,
     ) {
-        if self.events_hidden || self.link_previews_disabled {
-            // An answer dropped for being hidden must not leave its card
-            // loading: forget it and the text seen, so the pause runs and
-            // asks again on return.
-            if self.events_hidden {
+        if self.events_hidden
+            || self.link_previews_disabled
+            || !self.account().settings.link_previews
+        {
+            // An answer dropped for being hidden or turned off must not leave
+            // its card loading: forget it and the text seen, so the pause runs
+            // and asks again on return.
+            if self.events_hidden || !self.account().settings.link_previews {
                 // `account()` is the answer's own account while hidden; the
                 // composer state may be another account's.
                 let origin = self.account().id.clone();
@@ -7104,7 +7130,8 @@ impl App {
     }
 
     fn maybe_download_update(&mut self) {
-        if !self.settings.check_for_updates
+        if !crate::brand::UPDATES
+            || !self.settings.check_for_updates
             || !self.settings.download_updates_automatically
             || self.update.is_none()
             || !matches!(self.update_download, crate::updates::DownloadState::Idle)
@@ -7195,6 +7222,13 @@ impl App {
                     focused: wanted.1.clone(),
                 });
                 account.prefetch_sent = Some(wanted);
+            }
+            let stickers = account.settings.auto_downloads.stickers;
+            if account.sticker_auto_download_sent != Some(stickers) {
+                account
+                    .backend
+                    .send(Command::SetAutoDownloadStickers(stickers));
+                account.sticker_auto_download_sent = Some(stickers);
             }
         }
     }
@@ -14550,6 +14584,37 @@ mod tests {
     }
 
     #[test]
+    fn sticker_auto_download_syncs_per_account_when_changed() {
+        let directory = tempfile::tempdir().unwrap();
+        let (mut app, mut commands) = two_accounts(directory.path());
+        let mut sent = || -> Vec<bool> {
+            std::iter::from_fn(|| commands.try_recv().ok())
+                .filter_map(|command| match command {
+                    Command::SetAutoDownloadStickers(on) => Some(on),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        app.sync_prefetch();
+        assert_eq!(sent(), [false], "off by default");
+        app.sync_prefetch();
+        assert!(sent().is_empty(), "unchanged value is not resent");
+
+        app.accounts[0].settings.auto_downloads.stickers = true;
+        app.sync_prefetch();
+        assert!(sent().is_empty(), "other account changes stay separate");
+
+        app.accounts[1].settings.auto_downloads.stickers = true;
+        app.sync_prefetch();
+        assert_eq!(sent(), [true]);
+
+        app.accounts[1].settings.auto_downloads.stickers = false;
+        app.sync_prefetch();
+        assert_eq!(sent(), [false]);
+    }
+
+    #[test]
     fn leaving_an_account_before_it_is_linked_removes_it() {
         let directory = tempfile::tempdir().unwrap();
         let mut app = App::headless(AppDirs::under(directory.path()), Settings::default()).0;
@@ -15461,7 +15526,7 @@ mod tests {
                 .unwrap();
             Ok(())
         });
-        app.settings.check_for_updates = false;
+        app.settings.check_for_updates = true;
         app.save_settings();
         assert!(writes.try_recv().is_err(), "nothing written yet");
         release.send(()).unwrap();
@@ -15470,7 +15535,7 @@ mod tests {
         assert_eq!(path, app.dirs.settings_file());
         assert_eq!(access, fastframe_file::Access::Default);
         let saved: serde_json::Value = serde_json::from_slice(&contents).unwrap();
-        assert_eq!(saved["check_for_updates"], false);
+        assert_eq!(saved["check_for_updates"], true);
     }
 
     /// Settings and account settings waiting for their save are on the disk
@@ -15479,7 +15544,7 @@ mod tests {
     fn sleeping_and_quitting_wait_for_the_settings_to_reach_the_disk() {
         let root = tempfile::tempdir().unwrap();
         let (mut app, _events) = App::headless(AppDirs::under(root.path()), Settings::default());
-        app.settings.check_for_updates = false;
+        app.settings.check_for_updates = true;
         app.mark_settings_dirty();
         app.account_mut().settings.history_prefetch = true;
         app.account_mut().mark_settings_dirty();
@@ -15487,14 +15552,14 @@ mod tests {
             fastframe_power::Ack::default(),
         ));
         app.handle_power();
-        assert!(!Settings::load(&app.dirs.settings_file()).check_for_updates);
+        assert!(Settings::load(&app.dirs.settings_file()).check_for_updates);
         let account_file = app.account().dirs.settings_file();
         assert!(crate::settings::AccountSettings::load(&account_file).history_prefetch);
 
-        app.settings.check_for_updates = true;
+        app.settings.check_for_updates = false;
         app.mark_settings_dirty();
         app.shutdown();
-        assert!(Settings::load(&app.dirs.settings_file()).check_for_updates);
+        assert!(!Settings::load(&app.dirs.settings_file()).check_for_updates);
     }
 
     /// The window's geometry is remembered in the logic pass, which eframe
@@ -18336,26 +18401,28 @@ mod tests {
         let mut app = app();
         let (backend, mut commands) = Backend::recording();
         app.backend = backend;
-        app.settings.check_for_updates = false;
+        app.settings.check_for_updates = true;
         app.apply(Action::CheckForUpdates, &ctx);
-        assert_eq!(app.update_check, crate::updates::Check::Checking);
-        assert!(matches!(commands.try_recv(), Ok(Command::CheckForUpdates)));
-        app.apply(Action::CheckForUpdates, &ctx);
-        assert!(commands.try_recv().is_err(), "one check at a time");
+        assert_eq!(app.update_check, crate::updates::Check::Idle);
+        assert!(commands.try_recv().is_err());
+
+        app.update_check = crate::updates::Check::Checking;
         app.apply_backend_event(Event::UpdateChecked(Ok(None)), true);
         assert_eq!(app.update_check, crate::updates::Check::UpToDate);
-        app.apply(Action::CheckForUpdates, &ctx);
+
+        app.update_check = crate::updates::Check::Checking;
         app.apply_backend_event(Event::UpdateChecked(Err("offline".into())), true);
         assert_eq!(
             app.update_check,
             crate::updates::Check::Failed("offline".into())
         );
-        app.apply(Action::CheckForUpdates, &ctx);
+
         let release = crate::updates::Release {
             version: "99.0.0".into(),
             url: "https://github.com/ItIsNotKeshav/Zeus/releases/tag/v99.0.0".into(),
         };
         app.update = Some(release.clone());
+        app.update_check = crate::updates::Check::Checking;
         app.apply_backend_event(Event::UpdateChecked(Ok(Some(release))), true);
         assert_eq!(app.update_check, crate::updates::Check::Idle);
         assert!(app.show_update, "a release asked for opens even when known");
@@ -18371,6 +18438,7 @@ mod tests {
             url: "https://github.com/crmne/zapfast/releases/latest".into(),
         });
         app.update_support = Some(Err("Use your package manager".into()));
+        app.settings.check_for_updates = true;
         app.settings.download_updates_automatically = true;
         app.maybe_download_update();
         assert!(matches!(app.update_download, DownloadState::Idle));
@@ -18384,6 +18452,8 @@ mod tests {
         assert!(matches!(app.update_download, DownloadState::Idle));
         app.settings.download_updates_automatically = true;
         app.maybe_download_update();
+        assert!(matches!(app.update_download, DownloadState::Idle));
+        app.apply(Action::DownloadUpdate, &ctx);
         assert!(matches!(
             app.update_download,
             DownloadState::Downloading { .. }
@@ -18396,6 +18466,91 @@ mod tests {
         app.apply(Action::InstallUpdate, &ctx);
         assert!(matches!(app.update_download, DownloadState::Installing));
         assert!(!app.quit_requested, "wait for the helper before closing");
+    }
+
+    #[test]
+    fn updates_stay_disabled_across_actions_tick_and_auto_download() {
+        use crate::updates::{DownloadState, Installation, Kind};
+        let ctx = egui::Context::default();
+        let mut app = app();
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        app.settings.check_for_updates = true;
+        app.settings.download_updates_automatically = true;
+        app.update = Some(crate::updates::Release {
+            version: "99.0.0".into(),
+            url: "https://github.com/ItIsNotKeshav/Zeus/releases/tag/v99.0.0".into(),
+        });
+        app.update_support = Some(Ok(Installation {
+            executable: PathBuf::from("/fixture/zeus"),
+            kind: Kind::Portable,
+        }));
+
+        app.apply(Action::CheckForUpdates, &ctx);
+        app.tick(&ctx);
+        app.maybe_download_update();
+
+        let emitted: Vec<Command> = std::iter::from_fn(|| commands.try_recv().ok()).collect();
+        assert!(
+            !emitted.iter().any(|command| matches!(
+                command,
+                Command::CheckForUpdates | Command::InspectUpdate | Command::DownloadUpdate { .. }
+            )),
+            "no update commands should be sent: {emitted:?}"
+        );
+        assert_eq!(app.update_check, crate::updates::Check::Idle);
+        assert!(matches!(app.update_download, DownloadState::Idle));
+    }
+
+    #[test]
+    fn link_previews_stay_disabled_by_default_and_require_both_gates() {
+        let mut app = app();
+        let (backend, mut commands) = Backend::recording();
+        app.backend = backend;
+        let chat = "15550007777@s.whatsapp.net";
+        app.chats.push(Chat::new(chat.into(), "Ada".into()));
+        app.open_chat = Some(chat.into());
+        app.composer = "See https://example.com".into();
+        app.link_previews_disabled = false;
+
+        let composed = crate::model::ComposedPreview {
+            preview: crate::model::LinkPreview {
+                url: "https://example.com".into(),
+                title: Some("Example".into()),
+                description: None,
+            },
+            thumbnail: None,
+        };
+
+        assert!(!app.account().settings.link_previews);
+        assert!(app.watch_link_preview(0.0).is_none());
+        assert!(app.watch_link_preview(1.0).is_none());
+        assert!(commands.try_recv().is_err());
+        assert!(app.shown_preview().is_none());
+        app.link_preview_arrived("https://example.com".into(), Some(composed.clone()));
+        assert!(app.shown_preview().is_none());
+        assert!(app.current_preview().is_none());
+
+        app.account_mut().settings.link_previews = true;
+        assert!(app.watch_link_preview(2.0).is_some());
+        assert!(commands.try_recv().is_err());
+        assert!(app.watch_link_preview(3.0).is_none());
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(Command::FetchLinkPreview { ref url }) if url == "https://example.com"
+        ));
+        app.link_preview_arrived("https://example.com".into(), Some(composed));
+        assert!(app.shown_preview().is_some());
+        assert!(app.current_preview().is_some());
+
+        app.link_previews_disabled = true;
+        assert!(app.shown_preview().is_none());
+
+        app.link_previews_disabled = false;
+        app.account_mut().settings.link_previews = false;
+        assert!(app.shown_preview().is_none());
+        assert!(app.watch_link_preview(4.0).is_none());
+        assert!(commands.try_recv().is_err());
     }
 
     #[test]

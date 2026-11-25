@@ -1432,7 +1432,7 @@ fn privacy(app: &mut App, ui: &mut egui::Ui) {
             app.account_mut().mark_settings_dirty();
         }
         separator(ui, &palette);
-        let mut download = app.account().settings.auto_download;
+        let mut download = app.account().settings.auto_downloads.any();
         if switch_row(
             ui,
             &palette,
@@ -1446,7 +1446,7 @@ fn privacy(app: &mut App, ui: &mut egui::Ui) {
             true,
             true,
         ) {
-            app.account_mut().settings.auto_download = download;
+            app.account_mut().settings.auto_downloads.set_all(download);
             app.account_mut().mark_settings_dirty();
         }
     });

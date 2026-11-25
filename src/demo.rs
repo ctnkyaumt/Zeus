@@ -473,7 +473,7 @@ pub fn populate(app: &mut App) {
     // here instead.
     app.backend.record_demo_commands();
     // Demo mode has no backend to handle downloads.
-    app.account_mut().settings.auto_download = false;
+    app.account_mut().settings.auto_downloads = Default::default();
     app.link = LinkStatus::Connected;
     // The sample account was linked long ago: past the first-run setup.
     app.settings.setup_done = true;

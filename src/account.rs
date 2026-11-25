@@ -60,6 +60,8 @@ pub struct Account {
     /// The background-history state last sent to this account's worker: the
     /// switch and the chat on screen.
     pub(crate) prefetch_sent: Option<(bool, Option<ChatId>)>,
+    /// The sticker auto-download switch last sent to this account's worker.
+    pub(crate) sticker_auto_download_sent: Option<bool>,
     pub scroll_chat_into_view: Option<ChatId>,
     pub drafts: HashMap<ChatId, String>,
     /// When each chat's draft was last parked, so a chat with unsent text
@@ -209,6 +211,7 @@ impl Account {
             open_chat,
             split: None,
             prefetch_sent: None,
+            sticker_auto_download_sent: None,
             scroll_chat_into_view: None,
             drafts: HashMap::new(),
             draft_times: HashMap::new(),

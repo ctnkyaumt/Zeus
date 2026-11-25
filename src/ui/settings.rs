@@ -961,11 +961,6 @@ fn sections(app: &App) -> Vec<Section> {
     }
     chats.separator();
     // Media and history.
-    chats.account_toggle(
-        translated(locale, "Download files automatically"),
-        "",
-        |settings| &mut settings.auto_download,
-    );
     chats.account_toggle(translated(locale, "Fetch older history"), "", |settings| {
         &mut settings.history_prefetch
     });
@@ -1034,6 +1029,33 @@ fn sections(app: &App) -> Vec<Section> {
     chats.accordion(swipes.title.clone(), "", move |inner| {
         inner.entries = swipes.entries;
     });
+    let mut auto_downloads = Section::new(translated(locale, "Auto-downloads"));
+    auto_downloads.account_toggle(
+        translated(locale, "Photos"),
+        "",
+        |settings| &mut settings.auto_downloads.photos,
+    );
+    auto_downloads.account_toggle(
+        translated(locale, "Videos and GIFs"),
+        "",
+        |settings| &mut settings.auto_downloads.videos,
+    );
+    auto_downloads.account_toggle(
+        translated(locale, "Audio and voice messages"),
+        "",
+        |settings| &mut settings.auto_downloads.audio,
+    );
+    auto_downloads.account_toggle(
+        translated(locale, "Documents"),
+        "",
+        |settings| &mut settings.auto_downloads.documents,
+    );
+    auto_downloads.account_toggle(
+        translated(locale, "Stickers"),
+        "",
+        |settings| &mut settings.auto_downloads.stickers,
+    );
+    chats.absorb(auto_downloads);
 
     let mut notifications = Section::new(translated(locale, "Notifications"));
     // Alerts.
@@ -1113,6 +1135,14 @@ fn sections(app: &App) -> Vec<Section> {
         translated(locale, "Show when you are typing"),
         "",
         |settings| &mut settings.send_typing,
+    );
+    privacy.account_toggle(
+        translated(locale, "Fetch link previews"),
+        translated(
+            locale,
+            "Contacts linked websites to show previews while composing, when allowed on your phone.",
+        ),
+        |settings| &mut settings.link_previews,
     );
     privacy.separator();
     app_lock_rows(app, &mut privacy);

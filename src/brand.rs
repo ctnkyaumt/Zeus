@@ -15,4 +15,4 @@ pub const PREVIOUS: &str = "zapfast";
 pub const APP_USER_MODEL_ID: &str = "app.zeus.Zeus";
 /// Whether to check for, download and offer updates, from Zeus's own
 /// releases (`packaging/windows/release-zeus.cmd` publishes them).
-pub const UPDATES: bool = true;
+pub const UPDATES: bool = false;

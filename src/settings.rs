@@ -904,9 +904,6 @@ pub struct Settings {
     pub send_read_receipts: bool,
     /// Send typing state while composing.
     pub send_typing: bool,
-    /// Download attachments when they enter view instead of on click.
-    #[serde(alias = "auto_download_images")]
-    pub auto_download: bool,
     /// Whether the Halloween look, since removed, was on: read from older
     /// files only, so `Settings::migrate` can put back the grey doodle ink
     /// it had swapped for the accent.
@@ -990,8 +987,7 @@ pub struct Settings {
     /// Proxy for WhatsApp, media, and updates, such as
     /// `socks5h://127.0.0.1:9050`. Empty follows `ALL_PROXY` / `HTTPS_PROXY`.
     pub proxy: String,
-    /// Ask GitHub whether a newer release exists. Settings no longer shows
-    /// it: every copy checks, and the field stays so older files still load.
+    /// Ask GitHub whether a newer release exists. Off by default.
     pub check_for_updates: bool,
     /// The update channel older releases offered. Every copy follows stable
     /// releases now; the field stays so files from those releases still load,
@@ -1109,7 +1105,6 @@ impl Default for Settings {
             motion: MotionSpeed::Default,
             send_read_receipts: true,
             send_typing: true,
-            auto_download: true,
             legacy_halloween: false,
             swipes: Swipes::default(),
             show_wallpaper: true,
@@ -1141,13 +1136,13 @@ impl Default for Settings {
             cache_limit: CacheLimit::default(),
             keep_chats_archived: true,
             proxy: String::new(),
-            check_for_updates: true,
+            check_for_updates: false,
             update_channel: crate::updates::Channel::Stable,
             split_view: false,
             chat_bubbles: false,
             own_messages_left_in_groups: false,
             auto_bubble_chats: Vec::new(),
-            download_updates_automatically: true,
+            download_updates_automatically: false,
             save_contacts_to_phone: true,
             voice_speed: 1.0,
             microphone: None,
@@ -1183,7 +1178,8 @@ impl Default for Settings {
 /// 6. The Beta update channel is gone: everyone follows stable releases.
 /// 7. Check for updates is no longer a choice, and automatic update
 ///    downloads are on: both switch on once.
-pub const SETTINGS_VERSION: u32 = 7;
+/// 8. Automatic update checks and downloads switch off once.
+pub const SETTINGS_VERSION: u32 = 8;
 
 /// The key push to talk starts on.
 pub const DEFAULT_PUSH_TO_TALK_KEY: &str = "Space";
@@ -1513,12 +1509,11 @@ impl Settings {
             // stable releases, the one channel left.
             self.update_channel = crate::updates::Channel::Stable;
         }
-        if self.version < 7 {
-            // Settings no longer shows Check for updates, so every copy
-            // checks; automatic downloads became the default and older files
-            // stored the old default.
-            self.check_for_updates = true;
-            self.download_updates_automatically = true;
+        if self.version < 8 {
+            // Update checks and automatic update downloads are off by default;
+            // older files migrate to off once.
+            self.check_for_updates = false;
+            self.download_updates_automatically = false;
         }
         self.version = self.version.max(SETTINGS_VERSION);
     }
@@ -1584,13 +1579,43 @@ impl Settings {
     }
 }
 
+/// Which kinds of attachments download automatically when they enter view.
+/// Every kind starts off so nothing downloads without opting in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AutoDownload {
+    pub photos: bool,
+    pub videos: bool,
+    pub audio: bool,
+    pub documents: bool,
+    pub stickers: bool,
+}
+
+impl AutoDownload {
+    /// Whether any attachment kind is set to download automatically.
+    pub fn any(self) -> bool {
+        self.photos || self.videos || self.audio || self.documents || self.stickers
+    }
+
+    /// Sets every attachment kind to `on`.
+    pub fn set_all(&mut self, on: bool) {
+        self.photos = on;
+        self.videos = on;
+        self.audio = on;
+        self.documents = on;
+        self.stickers = on;
+    }
+}
+
 /// Preferences that belong to one WhatsApp account.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AccountSettings {
     pub send_typing: bool,
-    #[serde(alias = "auto_download_images")]
-    pub auto_download: bool,
+    /// Fetch link previews while composing when allowed on your phone.
+    pub link_previews: bool,
+    /// Which kinds of attachments download automatically when they enter view.
+    pub auto_downloads: AutoDownload,
     pub last_chat: Option<String>,
     pub notifications: bool,
     /// Which chats notify once, then stay quiet for ten minutes.
@@ -1617,7 +1642,8 @@ impl Default for AccountSettings {
     fn default() -> Self {
         Self {
             send_typing: true,
-            auto_download: true,
+            link_previews: false,
+            auto_downloads: AutoDownload::default(),
             last_chat: None,
             notifications: true,
             limit_notifications: NotificationLimit::Off,
@@ -1635,7 +1661,8 @@ impl AccountSettings {
     pub fn from_legacy(settings: &Settings) -> Self {
         Self {
             send_typing: settings.send_typing,
-            auto_download: settings.auto_download,
+            link_previews: false,
+            auto_downloads: AutoDownload::default(),
             last_chat: settings.last_chat.clone(),
             notifications: settings.notifications,
             limit_notifications: NotificationLimit::Off,
@@ -2033,8 +2060,8 @@ mod tests {
             serde_json::from_str(r#"{"theme":"light","future_field":1}"#).expect("parses");
         assert_eq!(parsed.legacy_theme, ThemeChoice::Light);
         assert!(parsed.enter_sends);
-        assert!(parsed.check_for_updates);
-        assert!(parsed.download_updates_automatically);
+        assert!(!parsed.check_for_updates);
+        assert!(!parsed.download_updates_automatically);
         assert!(parsed.show_wallpaper);
         assert_eq!(parsed.wallpaper_color, WallpaperColor::Theme);
         assert!(parsed.pause_other_media);
@@ -2137,7 +2164,7 @@ mod tests {
     #[test]
     fn removed_settings_are_ignored_and_dropped_on_save() {
         let (settings, stored) = load_from(
-            r#"{"enter_sends":false,"label_chips":true,"show_sender_pictures":true,
+            r#"{"enter_sends":false,"auto_download":true,"label_chips":true,"show_sender_pictures":true,
                 "names_from_contacts":false,"collapse_chat_list":false,
                 "save_contacts_to_phone":false,"keep_chat_list_position":true}"#,
         );
@@ -2147,6 +2174,7 @@ mod tests {
             "the old switch starts the new-contact box"
         );
         for key in [
+            "auto_download",
             "label_chips",
             "show_sender_pictures",
             "names_from_contacts",
@@ -2294,7 +2322,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let files = fastframe_file::Writer::new();
         let mut settings = Settings {
-            check_for_updates: false,
+            check_for_updates: true,
+            download_updates_automatically: true,
             ..Settings::default()
         };
         settings.set_theme(ThemeChoice::Messages);
@@ -2302,6 +2331,14 @@ mod tests {
         settings.save_to(&files, &settings_path).unwrap();
         let account = AccountSettings {
             history_prefetch: true,
+            link_previews: true,
+            auto_downloads: AutoDownload {
+                photos: true,
+                videos: false,
+                audio: true,
+                documents: false,
+                stickers: true,
+            },
             ..AccountSettings::default()
         };
         let account_path = dir.path().join("accounts").join("2").join("settings.json");
@@ -2318,13 +2355,79 @@ mod tests {
     }
 
     #[test]
-    fn version_six_update_switches_load_on() {
+    fn pre_eight_update_switches_migrate_off_and_explicit_eight_stays_on() {
+        for json in [
+            r#"{"version":6,"check_for_updates":true,"download_updates_automatically":true}"#,
+            r#"{"version":7,"check_for_updates":true,"download_updates_automatically":true}"#,
+        ] {
+            let (settings, stored) = load_from(json);
+            assert!(!settings.check_for_updates);
+            assert!(!settings.download_updates_automatically);
+            assert_eq!(stored["version"], SETTINGS_VERSION);
+        }
+
         let (settings, stored) = load_from(
-            r#"{"version":6,"check_for_updates":false,"download_updates_automatically":false}"#,
+            r#"{"version":8,"check_for_updates":true,"download_updates_automatically":true}"#,
         );
         assert!(settings.check_for_updates);
         assert!(settings.download_updates_automatically);
         assert_eq!(stored["version"], SETTINGS_VERSION);
+    }
+
+    #[test]
+    fn auto_download_starts_off_and_toggles_all_kinds() {
+        let mut auto = AutoDownload::default();
+        assert_eq!(
+            auto,
+            AutoDownload {
+                photos: false,
+                videos: false,
+                audio: false,
+                documents: false,
+                stickers: false,
+            }
+        );
+        assert!(!auto.any());
+
+        auto.set_all(true);
+        assert!(auto.any());
+        assert!(auto.photos && auto.videos && auto.audio && auto.documents && auto.stickers);
+
+        auto.set_all(false);
+        assert!(!auto.any());
+        assert!(!auto.photos && !auto.videos && !auto.audio && !auto.documents && !auto.stickers);
+    }
+
+    #[test]
+    fn legacy_account_settings_drop_auto_download_and_keep_everything_off() {
+        for legacy in [
+            r#"{"auto_download":true,"send_typing":false}"#,
+            r#"{"auto_download_images":true,"send_typing":false}"#,
+        ] {
+            let loaded: AccountSettings = serde_json::from_str(legacy).expect("parses");
+            assert!(!loaded.send_typing);
+            assert_eq!(loaded.auto_downloads, AutoDownload::default());
+            assert!(!loaded.auto_downloads.any());
+            assert!(!loaded.link_previews);
+        }
+    }
+
+    #[test]
+    fn auto_downloads_and_link_previews_round_trip_through_json() {
+        let saved = AccountSettings {
+            link_previews: true,
+            auto_downloads: AutoDownload {
+                photos: true,
+                videos: false,
+                audio: true,
+                documents: false,
+                stickers: true,
+            },
+            ..AccountSettings::default()
+        };
+        let json = serde_json::to_string(&saved).expect("serializes");
+        let loaded: AccountSettings = serde_json::from_str(&json).expect("deserializes");
+        assert_eq!(loaded, saved);
     }
 
     #[test]
