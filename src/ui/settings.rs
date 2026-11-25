@@ -1030,31 +1030,23 @@ fn sections(app: &App) -> Vec<Section> {
         inner.entries = swipes.entries;
     });
     let mut auto_downloads = Section::new(translated(locale, "Auto-downloads"));
-    auto_downloads.account_toggle(
-        translated(locale, "Photos"),
-        "",
-        |settings| &mut settings.auto_downloads.photos,
-    );
-    auto_downloads.account_toggle(
-        translated(locale, "Videos and GIFs"),
-        "",
-        |settings| &mut settings.auto_downloads.videos,
-    );
+    auto_downloads.account_toggle(translated(locale, "Photos"), "", |settings| {
+        &mut settings.auto_downloads.photos
+    });
+    auto_downloads.account_toggle(translated(locale, "Videos and GIFs"), "", |settings| {
+        &mut settings.auto_downloads.videos
+    });
     auto_downloads.account_toggle(
         translated(locale, "Audio and voice messages"),
         "",
         |settings| &mut settings.auto_downloads.audio,
     );
-    auto_downloads.account_toggle(
-        translated(locale, "Documents"),
-        "",
-        |settings| &mut settings.auto_downloads.documents,
-    );
-    auto_downloads.account_toggle(
-        translated(locale, "Stickers"),
-        "",
-        |settings| &mut settings.auto_downloads.stickers,
-    );
+    auto_downloads.account_toggle(translated(locale, "Documents"), "", |settings| {
+        &mut settings.auto_downloads.documents
+    });
+    auto_downloads.account_toggle(translated(locale, "Stickers"), "", |settings| {
+        &mut settings.auto_downloads.stickers
+    });
     chats.absorb(auto_downloads);
 
     let mut notifications = Section::new(translated(locale, "Notifications"));

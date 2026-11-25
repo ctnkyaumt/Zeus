@@ -730,7 +730,10 @@ mod tests {
     fn windows_command_rejects_empty_or_whitespace_templates() {
         let url = "https://example.invalid/";
         assert_eq!(parse_windows_command_with("", url, |_| false), None);
-        assert_eq!(parse_windows_command_with("   \t\n  ", url, |_| false), None);
+        assert_eq!(
+            parse_windows_command_with("   \t\n  ", url, |_| false),
+            None
+        );
         assert_eq!(parse_windows_command_with(r#""""#, url, |_| false), None);
     }
 }
